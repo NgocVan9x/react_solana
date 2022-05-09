@@ -1,6 +1,156 @@
 import Head from 'next/head'
+import { useState, useEffect, useCallback } from "react";
+import {
+  Connection,
+  PublicKey,
+  Transaction,
+  clusterApiUrl,
+  SystemProgram,
+} from "@solana/web3.js";
+
+
+
+const NETWORK = clusterApiUrl("mainnet-beta");
 
 export default function Home() {
+  // const provider = getProvider();
+  const [provider, setProvider] = useState();
+  const [logs, setLogs] = useState([]);
+  const addLog = useCallback(
+      (log) => setLogs((logs) => [...logs, "> " + log]),
+      []
+  );
+  const connection = new Connection(NETWORK);
+  const [, setConnected] = useState(false);
+  const [publicKey, setPublicKey] = useState(null);
+
+  const getProvider = () => {
+    if ("solana" in window) {
+      const anyWindow = window;
+      const provider = anyWindow.solana;
+      if (provider.isPhantom) {
+        return provider;
+      }
+    }
+    window.open("https://phantom.app/", "_blank");
+  };
+
+  useEffect(() => {
+    const provider = getProvider();
+    setProvider(provider);
+
+
+    if (!provider) return;
+    // try to eagerly connect
+    provider.connect({ onlyIfTrusted: true }).catch((err) => {
+      // fail silently
+    });
+    provider.on("connect", (publicKey) => {
+      setPublicKey(publicKey);
+      setConnected(true);
+      addLog("[connect] " + publicKey?.toBase58());
+    });
+    provider.on("disconnect", () => {
+      setPublicKey(null);
+      setConnected(false);
+      addLog("[disconnect] 👋");
+    });
+    provider.on("accountChanged", (publicKey) => {
+      setPublicKey(publicKey);
+      if (publicKey) {
+        addLog("[accountChanged] Switched account to " + publicKey?.toBase58());
+      } else {
+        addLog("[accountChanged] Switched unknown account");
+        // In this case, dapps could not to anything, or,
+        // Only re-connecting to the new account if it is trusted
+        // provider.connect({ onlyIfTrusted: true }).catch((err) => {
+        //   // fail silently
+        // });
+        // Or, always trying to reconnect
+        provider
+            .connect()
+            .then(() => addLog("[accountChanged] Reconnected successfully"))
+            .catch((err) => {
+              addLog("[accountChanged] Failed to re-connect: " + err.message);
+            });
+      }
+    });
+    return () => {
+      provider.disconnect();
+    };
+  }, [provider, addLog]);
+
+  if (!provider) {
+    return <h2>Could not find a provider</h2>;
+  }
+
+
+
+  const createTransferTransaction = async () => {
+    if (!provider.publicKey) return;
+    let transaction = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: provider.publicKey,
+          toPubkey: provider.publicKey,
+          lamports: 100,
+        })
+    );
+    transaction.feePayer = provider.publicKey;
+    addLog("Getting recent blockhash");
+    const anyTransaction = transaction;
+    anyTransaction.recentBlockhash = (
+        await connection.getRecentBlockhash()
+    ).blockhash;
+    return transaction;
+  };
+  const sendTransaction = async () => {
+    try {
+      const transaction = await createTransferTransaction();
+      if (!transaction) return;
+      let signed = await provider.signTransaction(transaction);
+      addLog("Got signature, submitting transaction");
+      let signature = await connection.sendRawTransaction(signed.serialize());
+      addLog("Submitted transaction " + signature + ", awaiting confirmation");
+      await connection.confirmTransaction(signature);
+      addLog("Transaction " + signature + " confirmed");
+    } catch (err) {
+      console.warn(err);
+      addLog("[error] sendTransaction: " + JSON.stringify(err));
+    }
+  };
+  const signMultipleTransactions = async (onlyFirst = false) => {
+    try {
+      const [transaction1, transaction2] = await Promise.all([
+        createTransferTransaction(),
+        createTransferTransaction(),
+      ]);
+      if (transaction1 && transaction2) {
+        let txns;
+        if (onlyFirst) {
+          txns = await provider.signAllTransactions([transaction1]);
+        } else {
+          txns = await provider.signAllTransactions([
+            transaction1,
+            transaction2,
+          ]);
+        }
+        addLog("signMultipleTransactions txns: " + JSON.stringify(txns));
+      }
+    } catch (err) {
+      console.warn(err);
+      addLog("[error] signMultipleTransactions: " + JSON.stringify(err));
+    }
+  };
+  const signMessage = async (message) => {
+    try {
+      const data = new TextEncoder().encode(message);
+      const res = await provider.signMessage(data);
+      addLog("Message signed " + JSON.stringify(res));
+    } catch (err) {
+      console.warn(err);
+      addLog("[error] signMessage: " + JSON.stringify(err));
+    }
+  };
   return (
     <div className="container">
       <Head>
@@ -8,202 +158,69 @@ export default function Home() {
         <link rel="icon" href="/favicon.ico" />
       </Head>
 
-      <main>
-        <h1 className="title">
-          Welcome to <a href="https://nextjs.org">Next.js!</a>
-        </h1>
-
-        <p className="description">
-          Get started by editing <code>pages/index.js</code>
-        </p>
-
-        <div className="grid">
-          <a href="https://nextjs.org/docs" className="card">
-            <h3>Documentation &rarr;</h3>
-            <p>Find in-depth information about Next.js features and API.</p>
-          </a>
-
-          <a href="https://nextjs.org/learn" className="card">
-            <h3>Learn &rarr;</h3>
-            <p>Learn about Next.js in an interactive course with quizzes!</p>
-          </a>
-
-          <a
-            href="https://github.com/vercel/next.js/tree/master/examples"
-            className="card"
-          >
-            <h3>Examples &rarr;</h3>
-            <p>Discover and deploy boilerplate example Next.js projects.</p>
-          </a>
-
-          <a
-            href="https://vercel.com/import?filter=next.js&utm_source=create-next-app&utm_medium=default-template&utm_campaign=create-next-app"
-            className="card"
-          >
-            <h3>Deploy &rarr;</h3>
-            <p>
-              Instantly deploy your Next.js site to a public URL with Vercel.
-            </p>
-          </a>
-        </div>
-      </main>
-
-      <footer>
-        <a
-          href="https://vercel.com?utm_source=create-next-app&utm_medium=default-template&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Powered by{' '}
-          <img src="/vercel.svg" alt="Vercel" className="logo" />
-        </a>
-      </footer>
-
-      <style jsx>{`
-        .container {
-          min-height: 100vh;
-          padding: 0 0.5rem;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-          align-items: center;
-        }
-
-        main {
-          padding: 5rem 0;
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-          align-items: center;
-        }
-
-        footer {
-          width: 100%;
-          height: 100px;
-          border-top: 1px solid #eaeaea;
-          display: flex;
-          justify-content: center;
-          align-items: center;
-        }
-
-        footer img {
-          margin-left: 0.5rem;
-        }
-
-        footer a {
-          display: flex;
-          justify-content: center;
-          align-items: center;
-        }
-
-        a {
-          color: inherit;
-          text-decoration: none;
-        }
-
-        .title a {
-          color: #0070f3;
-          text-decoration: none;
-        }
-
-        .title a:hover,
-        .title a:focus,
-        .title a:active {
-          text-decoration: underline;
-        }
-
-        .title {
-          margin: 0;
-          line-height: 1.15;
-          font-size: 4rem;
-        }
-
-        .title,
-        .description {
-          text-align: center;
-        }
-
-        .description {
-          line-height: 1.5;
-          font-size: 1.5rem;
-        }
-
-        code {
-          background: #fafafa;
-          border-radius: 5px;
-          padding: 0.75rem;
-          font-size: 1.1rem;
-          font-family: Menlo, Monaco, Lucida Console, Liberation Mono,
-            DejaVu Sans Mono, Bitstream Vera Sans Mono, Courier New, monospace;
-        }
-
-        .grid {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          flex-wrap: wrap;
-
-          max-width: 800px;
-          margin-top: 3rem;
-        }
-
-        .card {
-          margin: 1rem;
-          flex-basis: 45%;
-          padding: 1.5rem;
-          text-align: left;
-          color: inherit;
-          text-decoration: none;
-          border: 1px solid #eaeaea;
-          border-radius: 10px;
-          transition: color 0.15s ease, border-color 0.15s ease;
-        }
-
-        .card:hover,
-        .card:focus,
-        .card:active {
-          color: #0070f3;
-          border-color: #0070f3;
-        }
-
-        .card h3 {
-          margin: 0 0 1rem 0;
-          font-size: 1.5rem;
-        }
-
-        .card p {
-          margin: 0;
-          font-size: 1.25rem;
-          line-height: 1.5;
-        }
-
-        .logo {
-          height: 1em;
-        }
-
-        @media (max-width: 600px) {
-          .grid {
-            width: 100%;
-            flex-direction: column;
-          }
-        }
-      `}</style>
-
-      <style jsx global>{`
-        html,
-        body {
-          padding: 0;
-          margin: 0;
-          font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto,
-            Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue,
-            sans-serif;
-        }
-
-        * {
-          box-sizing: border-box;
-        }
-      `}</style>
+        <main>
+          <h1>Phantom Sandbox</h1>
+          {provider && publicKey ? (
+              <>
+                <div>
+                  <pre>Connected as</pre>
+                  <br />
+                  <pre>{publicKey.toBase58()}</pre>
+                  <br />
+                </div>
+                <button onClick={sendTransaction}>Send Transaction</button>
+                <button onClick={() => signMultipleTransactions(false)}>
+                  Sign All Transactions (multiple){" "}
+                </button>
+                <button onClick={() => signMultipleTransactions(true)}>
+                  Sign All Transactions (single){" "}
+                </button>
+                <button
+                    onClick={() =>
+                        signMessage(
+                            "To avoid digital dognappers, sign below to authenticate with CryptoCorgis."
+                        )
+                    }
+                >
+                  Sign Message
+                </button>
+                <button
+                    onClick={async () => {
+                      try {
+                        await provider.disconnect();
+                      } catch (err) {
+                        console.warn(err);
+                        addLog("[error] disconnect: " + JSON.stringify(err));
+                      }
+                    }}
+                >
+                  Disconnect
+                </button>
+              </>
+          ) : (
+              <>
+                <button
+                    onClick={async () => {
+                      try {
+                        await provider.connect();
+                      } catch (err) {
+                        console.warn(err);
+                        addLog("[error] connect: " + JSON.stringify(err));
+                      }
+                    }}
+                >
+                  Connect to Phantom
+                </button>
+              </>
+          )}
+        </main>
+        <footer className="logs">
+          {logs.map((log, i) => (
+              <div className="log" key={i}>
+                {log}
+              </div>
+          ))}
+        </footer>
     </div>
   )
 }
